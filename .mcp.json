@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rbc": {
+      "command": "/Users/dandiep/projects/rbc_mcp_server/venv/bin/python3",
+      "args": ["/Users/dandiep/projects/rbc_mcp_server/rbc_mcp_server.py"]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+reconchess>=1.0.0
+python-chess>=1.0.0
+mcp>=0.1.0
+httpx>=0.24.0
