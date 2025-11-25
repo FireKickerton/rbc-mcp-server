@@ -16,14 +16,25 @@ For complete rules, see: https://reconchess.readthedocs.io/en/latest/rules.html
 
 ## Features
 
+### Local Games
 - Play local games against three different AI bots:
   - **RandomBot**: Plays random legal moves
   - **AttackerBot**: Prefers capturing moves and senses in opponent territory
   - **TroutBot**: Actively seeks and tracks the opponent's king
-- Connect to remote games on rbc.jhuapl.edu
-- Full MCP tool integration for Claude and other LLM clients
+- Human vs Bot games with MCP tool integration
 - Game state tracking with turn-by-turn information
 - Asynchronous game execution in background threads
+
+### Remote Games (rbc.jhuapl.edu)
+- **Bot Connection**: Connect bots to automatically accept and play remote games
+- **Ranked & Unranked**: Support for both competitive ranked and practice unranked matches
+- **Version Management**: Track separate ELO ratings for different bot versions
+- **Server Utilities**:
+  - Get active users
+  - Send/receive game invitations
+  - Check server version compatibility
+- **Concurrent Games**: Play multiple games simultaneously (configurable limit)
+- Full integration with official RBC server API
 
 ## Installation
 
@@ -141,22 +152,66 @@ Delete a game and free its resources.
 
 ### Remote Game Tools
 
-#### `create_remote_game`
-Connect to a game on rbc.jhuapl.edu.
+#### Bot Connection Tools
+
+##### `connect_bot`
+Connect a bot to the RBC server to automatically listen for and accept game invitations.
+
+Parameters:
+- `username` (required): RBC server username
+- `password` (required): RBC server password
+- `bot_path` (required): Path to bot source or module (e.g., "reconchess.bots.random_bot")
+- `ranked` (optional): Play ranked matches (default: false)
+- `max_concurrent_games` (optional): Max concurrent games (default: 4)
+
+Returns a connection_id for managing the bot connection.
+
+##### `disconnect_bot`
+Stop a bot from accepting new invitations. Active games will complete before disconnecting.
+
+##### `get_bot_connection_status`
+Get status of a bot connection including games played, version, and connection state.
+
+##### `list_bot_connections`
+List all active bot connections.
+
+##### `increment_bot_version`
+Increment version number for a ranked bot (starts fresh ELO tracking).
+
+#### Server Utility Tools
+
+##### `check_server_version`
+Check if local reconchess version matches server requirements.
+
+##### `get_active_users`
+Get list of users currently active on the server.
+
+##### `send_invitation`
+Send a game invitation to another user.
+
+##### `get_invitations`
+Get your pending game invitations.
+
+#### Direct Game Connection Tools
+
+##### `create_remote_game`
+Connect to a specific game on rbc.jhuapl.edu (for human play).
 
 Parameters:
 - `server_url` (optional): Server URL (default: "https://rbc.jhuapl.edu")
 - `auth_token`: Base64 encoded authentication token
 - `remote_game_id`: Game ID on the remote server
 
-#### `get_remote_game_status`
+##### `get_remote_game_status`
 Get the status of a remote game.
 
-#### `list_remote_games`
+##### `list_remote_games`
 List all active remote game sessions.
 
-#### `delete_remote_game`
+##### `delete_remote_game`
 Delete a remote game session.
+
+**For detailed remote game documentation, see [REMOTE_GAMES_GUIDE.md](REMOTE_GAMES_GUIDE.md)**
 
 ## Example Game Flow
 
