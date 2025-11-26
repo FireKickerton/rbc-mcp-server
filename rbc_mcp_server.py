@@ -1532,7 +1532,12 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             username = arguments["username"]
             password = arguments["password"]
             opponent = arguments["opponent"]
-            color = arguments["color"]
+            if (arguments["color"].lower() == "white"):
+                color = True
+            elif (arguments["color"].lower() == "black"):
+                color = False
+            else:
+                color = random.choice([True, False])
 
             try:
                 server = RBCServer(server_url, (username, password))
