@@ -1,284 +1,334 @@
 # Reconnaissance Blind Chess MCP Server
 
-A Model Context Protocol (MCP) server that enables humans and LLMs to play Reconnaissance Blind Chess (RBC) both locally against AI bots and remotely on the official RBC server at rbc.jhuapl.edu.
+An MCP (Model Context Protocol) server that enables LLM agents to play Reconnaissance Blind Chess (RBC) games remotely on [rbc.jhuapl.edu](https://rbc.jhuapl.edu) against various bots.
 
-## What is Reconnaissance Blind Chess?
+## Overview
 
-Reconnaissance Blind Chess is a variant of chess where you can only see your own pieces. Key rules:
-
-- **Limited Vision**: You only see your own pieces, not your opponent's
-- **Sensing Phase**: Each turn, you can sense a 3x3 area to discover opponent pieces
-- **Move Phase**: Make a move based on your incomplete knowledge
-- **Capture to Win**: The goal is to capture the opponent's king (not checkmate)
-- **Check Rules Removed**: You can move into check, castle through check, etc.
-
-For complete rules, see: https://reconchess.readthedocs.io/en/latest/rules.html
-
-## Features
-
-- Play local games against three different AI bots:
-  - **RandomBot**: Plays random legal moves
-  - **AttackerBot**: Prefers capturing moves and senses in opponent territory
-  - **TroutBot**: Actively seeks and tracks the opponent's king
-- Connect to remote games on rbc.jhuapl.edu
-- Full MCP tool integration for Claude and other LLM clients
-- Game state tracking with turn-by-turn information
-- Asynchronous game execution in background threads
+This server provides tools for LLM agents to:
+- Play **unranked games** against specific bots (random, attacker, trout, Oracle, StrangeFish2, etc.)
+- Wait for and accept **ranked game** invitations
+- Choose colors (white, black, or random) for unranked games
+- Track game state, board positions, and move history
+- View ASCII representations of the current board
+- Submit sense actions and moves during gameplay
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.9 or higher
-- pip or pip3
+- Python 3.8 or higher
+- An account on [rbc.jhuapl.edu](https://rbc.jhuapl.edu)
 
 ### Setup
 
-1. Clone or download this repository
-
-2. Create a virtual environment and install dependencies:
-
+1. Clone or download this repository:
 ```bash
-cd rbc_mcp_server
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+cd /Users/diept1/projects/rbc_mcp_server
 ```
 
-3. Verify installation:
-
+2. Create and activate a virtual environment:
 ```bash
-python3 rbc_mcp_server.py --version
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
 ## Usage
 
 ### Running the MCP Server
 
-The MCP server communicates via stdio and is designed to be used with MCP clients like Claude Desktop.
-
-To run standalone (for testing):
+Start the server using:
 
 ```bash
-source venv/bin/activate
-python3 rbc_mcp_server.py
+python rbc_mcp_server.py
 ```
 
-### Configuring with Claude Desktop
+The server communicates via stdio and is designed to be used with MCP-compatible clients (like Claude Desktop or other LLM interfaces).
 
-Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+### Configuring Claude Desktop
+
+Add this to your Claude Desktop configuration file:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "rbc": {
-      "command": "/Users/YOUR_USERNAME/projects/rbc_mcp_server/venv/bin/python3",
-      "args": ["/Users/YOUR_USERNAME/projects/rbc_mcp_server/rbc_mcp_server.py"]
+      "command": "python",
+      "args": ["/Users/diept1/projects/new_rbc_mcp_server/rbc_mcp_server.py"],
+      "env": {}
     }
   }
 }
 ```
 
-Replace `/Users/YOUR_USERNAME/projects/rbc_mcp_server` with your actual path.
+Adjust the path to match your installation directory.
 
-## MCP Tools
+## Available Tools
 
-### Local Game Tools
+### 1. `start_unranked_game`
 
-#### `create_local_game`
-Create and start a new local game against a bot.
+Start an unranked game against a specific bot by sending an invitation (based on rc_play_on_server.py).
 
-Parameters:
-- `bot_type` (optional): "random", "attacker", or "trout" (default: "random")
-- `color` (optional): "white", "black", or "random" (default: "random")
+**Parameters:**
+- `opponent_bot` (string): Bot name (e.g., "random", "attacker", "trout", "oracle", "strangefish2")
+- `color` (string): Color to play as ("white", "black", or "random")
+  - "white": Always play as white
+  - "black": Always play as black
+  - "random": 50/50 chance of either color
+- `username` (string): Your username on rbc.jhuapl.edu
+- `password` (string): Your password on rbc.jhuapl.edu
 
-Returns: Game ID and initial game information
-
-#### `get_game_status`
-Get the current status of a game.
-
-Parameters:
-- `game_id`: The game ID
-
-Returns: Game status including whether it's waiting for your input
-
-#### `get_board_state`
-Get your current view of the board (only pieces you can see).
-
-Parameters:
-- `game_id`: The game ID
-
-Returns: Board FEN and unicode representation
-
-#### `choose_sense`
-Choose a square to sense (reveals 3x3 area).
-
-Parameters:
-- `game_id`: The game ID
-- `square`: Square name (e.g., "e4", "d5") or "pass"
-
-#### `choose_move`
-Choose a move to make.
-
-Parameters:
-- `game_id`: The game ID
-- `move`: Move in UCI format (e.g., "e2e4") or "pass"
-
-#### `get_sense_result`
-Get the result of your last sense action.
-
-#### `get_move_result`
-Get the result of your last move.
-
-#### `get_opponent_move_info`
-Get information about opponent's last move.
-
-#### `list_local_games`
-List all active local game IDs.
-
-#### `delete_local_game`
-Delete a game and free its resources.
-
-### Remote Game Tools
-
-#### `create_remote_game`
-Connect to a game on rbc.jhuapl.edu.
-
-Parameters:
-- `server_url` (optional): Server URL (default: "https://rbc.jhuapl.edu")
-- `auth_token`: Base64 encoded authentication token
-- `remote_game_id`: Game ID on the remote server
-
-#### `get_remote_game_status`
-Get the status of a remote game.
-
-#### `list_remote_games`
-List all active remote game sessions.
-
-#### `delete_remote_game`
-Delete a remote game session.
-
-## Example Game Flow
-
-Here's how a typical game works:
-
-1. **Create a game**:
-```
-create_local_game(bot_type="trout", color="white")
-→ Returns game_id: 1
+**Example:**
+```json
+{
+  "opponent_bot": "trout",
+  "color": "white",
+  "username": "your_username",
+  "password": "your_password"
+}
 ```
 
-2. **Check status** (repeat until waiting_for_sense is true):
-```
-get_game_status(game_id=1)
-→ waiting_for_sense: true
-```
+**Notes:**
+- The server sends an invitation to the bot via `server.send_invitation()`
+- The game starts automatically when the bot accepts the invitation
+- Use `list_active_games` to see when the game has started
+- The game ID is generated by the server upon invitation acceptance
 
-3. **Sense the board**:
-```
-choose_sense(game_id=1, square="e4")
-get_sense_result(game_id=1)
-→ Shows 3x3 area around e4
-```
+### 2. `start_ranked_game`
 
-4. **Check status** (repeat until waiting_for_move is true):
-```
-get_game_status(game_id=1)
-→ waiting_for_move: true
-```
+Start listening for ranked game invitations from the RBC server. Automatically accepts invitations and plays games with assigned colors.
 
-5. **Make a move**:
-```
-choose_move(game_id=1, move="e2e4")
-get_move_result(game_id=1)
-→ Shows if move succeeded and if you captured anything
+**Parameters:**
+- `username` (string): Your username on rbc.jhuapl.edu
+- `password` (string): Your password on rbc.jhuapl.edu
+- `max_concurrent_games` (integer, optional): Maximum number of concurrent ranked games to play (default: 1)
+
+**Example:**
+```json
+{
+  "username": "your_username",
+  "password": "your_password",
+  "max_concurrent_games": 2
+}
 ```
 
-6. **Repeat steps 2-5** until game is over
+**Notes:**
+- The listener runs continuously in the background, checking for invitations every 5 seconds
+- When an invitation is received, it's automatically accepted and a game starts
+- You'll be assigned a color by the server
+- Use `list_active_games` to see which games are running
+- Use `stop_ranked_listener` to stop accepting new invitations
 
-## Playing on Remote Server
+### 3. `stop_ranked_listener`
 
-To play on the official RBC server at rbc.jhuapl.edu:
+Stop listening for ranked game invitations.
 
-1. **Authentication**: Use the provided token: `bWNwX3JiYzpCZWF6ZXJCMzNz`
+**Parameters:** None
 
-2. **Get a game ID**: You'll need to create or join a game on the RBC server (outside of this MCP)
-
-3. **Connect**:
+**Example:**
+```json
+{}
 ```
-create_remote_game(
-  auth_token="bWNwX3JiYzpCZWF6ZXJCMzNz",
-  remote_game_id="YOUR_GAME_ID"
-)
+
+**Notes:**
+- Games already in progress will continue
+- You can start listening again with `start_ranked_game`
+
+### 4. `get_game_state`
+
+Get the current state of a game including all tracking information.
+
+**Parameters:**
+- `game_id` (string): The game ID returned when starting a game
+
+### 5. `get_board_ascii`
+
+Get an ASCII representation of the current board state with game information.
+
+**Parameters:**
+- `game_id` (string): The game ID
+
+**Example Output:**
+```
+8 r n b q k b n r
+7 p p p p p p p p
+6 . . . . . . . .
+5 . . . . . . . .
+4 . . . . P . . .
+3 . . . . . . . .
+2 P P P P . P P P
+1 R N B Q K B N R
+  a b c d e f g h
+
+Turn: 1
+Playing as: White
+Opponent: trout
+
+Last move: e2e4
+Actual move: e2e4
 ```
 
-4. **Play**: Use the same sense/move flow as local games
+### 6. `submit_sense`
 
-## Architecture
+Submit a sense action for the current turn. In RBC, sensing reveals a 3x3 area centered on the chosen square.
 
-The server is structured as follows:
+**Parameters:**
+- `game_id` (string): The game ID
+- `square` (string): Square to sense (e.g., "e4", "d5") or "pass" to skip sensing
 
-- **Bot Players**: Three AI opponents implementing the reconchess Player interface
-- **Human Player**: Interactive player that waits for MCP tool calls
-- **Game Manager**: Manages multiple concurrent games (local and remote)
-- **Background Threads**: Games run asynchronously to avoid blocking the MCP server
-- **MCP Server**: Provides tools for game interaction
+**Example:**
+```json
+{
+  "game_id": "unranked_trout_20231130_143022",
+  "square": "e5"
+}
+```
 
-## Dependencies
+### 7. `submit_move`
 
-- `reconchess>=1.0.0` - Official Reconnaissance Blind Chess library
-- `python-chess>=1.0.0` - Chess logic and board representation
-- `mcp>=0.1.0` - Model Context Protocol SDK
-- `httpx>=0.24.0` - HTTP client for remote games
+Submit a move for the current turn.
 
-## Game Rules Reference
+**Parameters:**
+- `game_id` (string): The game ID
+- `move` (string): Move in UCI format (e.g., "e2e4", "e7e8q" for promotion) or "pass" to skip moving
 
-From the official documentation:
+**Example:**
+```json
+{
+  "game_id": "unranked_trout_20231130_143022",
+  "move": "e2e4"
+}
+```
 
-### Turn Structure
-Each turn has three phases:
-1. **Opponent Move Notification**: Learn if opponent captured your piece
-2. **Sense Phase**: Choose a square to sense (3x3 area)
-3. **Move Phase**: Make your move
+### 8. `list_active_games`
 
-### Move Execution
-- Moves must be legal on the true board
-- Sliding pieces (Q, R, B) capture if blocked by opponent
-- Pawns moving 2 squares move 1 if blocked
-- Illegal moves result in passing
+List all currently active games.
 
-### Winning
-- Capture the opponent's king to win
-- No checkmate rules
-- Games can end by timeout or other conditions
+**Parameters:** None
+
+### 9. `get_game_history`
+
+Get detailed move-by-move history of a game.
+
+**Parameters:**
+- `game_id` (string): The game ID
+
+## Game Flow
+
+Each turn in Reconnaissance Blind Chess follows this sequence:
+
+1. **Opponent Move Result**: You're informed if your opponent captured one of your pieces
+2. **Sense Phase**: Choose a square to sense (reveals 3x3 area around it)
+3. **Move Phase**: Choose a move to make
+
+### Example Unranked Game Session
+
+```
+1. Start a game:
+   Use: start_unranked_game with opponent="trout", color="white"
+
+2. View the board:
+   Use: get_board_ascii with the returned game_id
+
+3. Submit sense:
+   Use: submit_sense with square="e5"
+
+4. Submit move:
+   Use: submit_move with move="e2e4"
+
+5. Repeat steps 2-4 for each turn
+```
+
+### Example Ranked Game Session
+
+```
+1. Start listening for invitations:
+   Use: start_ranked_game with username="your_username", password="your_password"
+
+2. Wait for invitations (happens automatically in background):
+   The server will accept invitations and start games
+
+3. Check active games:
+   Use: list_active_games to see which games are running
+
+4. Play each game:
+   For each game_id, use get_board_ascii, submit_sense, and submit_move
+
+5. Stop listening (when done):
+   Use: stop_ranked_listener
+```
+
+## RBC Rules Summary
+
+- **Objective**: Capture the opponent's king (not checkmate)
+- **Sensing**: Each turn, sense a 3x3 area to see the true board state
+- **Moves**: Make standard chess moves, but illegal moves may fail or be modified
+- **No check warnings**: Kings can move into check
+- **Limited information**: You only see what you sense and capture feedback
+
+For complete rules, see: [RBC Rules Documentation](https://reconchess.readthedocs.io/en/latest/rules.html)
+
+## API Documentation
+
+This server implements the reconchess Player API. For full API details, see:
+[Reconchess API Documentation](https://reconchess.readthedocs.io/en/latest/reconchess.html#player)
+
+## Game State Tracking
+
+The server tracks for each game:
+- Current board state (based on your sensing)
+- Turn number
+- All opponent move results
+- All sense results
+- All your move results
+- Game history when complete
+
+## Resources
+
+The server exposes game states as MCP resources at:
+- `rbc://game/{game_id}` - JSON representation of game state
 
 ## Troubleshooting
 
-### "reconchess could not be resolved"
-Make sure you've activated the virtual environment:
+### Import Errors
+If you see import errors for `mcp`, `chess`, or `reconchess`:
 ```bash
-source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### Game not responding
-Check the game status to see if it's waiting for your input:
-```
-get_game_status(game_id=1)
-```
+### Connection Issues
+- Verify your rbc.jhuapl.edu credentials
+- Check that the server is accessible
+- Ensure you have an active internet connection
 
-### Remote game connection issues
-Verify:
-1. You have the correct authentication token
-2. The game ID exists on the server
-3. The game hasn't already started or finished
+### Game Timeout
+Games have time limits. If a turn times out:
+- The server will auto-pass for sense/move
+- Check `seconds_left` in game state
+
+## Contributing
+
+This is a basic implementation. Potential improvements:
+- Better error handling and retry logic
+- Support for local games
+- Game replay functionality
+- Enhanced board visualization
+- Tournament support
 
 ## License
 
-This project uses the reconchess library and follows its licensing terms.
+This project uses the reconchess library and follows its license terms.
 
-## References
+## Links
 
-- [Reconchess Documentation](https://reconchess.readthedocs.io/)
-- [Reconchess Rules](https://reconchess.readthedocs.io/en/latest/rules.html)
 - [RBC Server](https://rbc.jhuapl.edu)
-- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Reconchess Documentation](https://reconchess.readthedocs.io/)
+- [RBC Rules](https://reconchess.readthedocs.io/en/latest/rules.html)
+- [MCP Documentation](https://modelcontextprotocol.io/)
