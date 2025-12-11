@@ -77,6 +77,7 @@ class RBCServer:
     def __init__(self, server_url, auth, current_game_id: int = None):
         self.server_url = server_url.rstrip('/')
         self.invitations_url = '{}/api/invitations'.format(self.server_url)
+        self.ranked_url = '{}/api/ranked'.format(self.server_url)
         self.user_url = '{}/api/users'.format(self.server_url)
         self.me_url = '{}/api/users/me'.format(self.server_url)
         self.game_url = '{}/api/games'.format(self.server_url)
@@ -139,14 +140,14 @@ class RBCServer:
             self._error_resign(effective_game_id)
         raise APIRetryError(f"GET {url} failed after {self.MAX_RETRIES} retries", effective_game_id)
 
-    def _post(self, url: str, json: dict = None, game_id: int = None) -> dict:
+    def _post(self, url: str, json: dict = None, game_id: int = None, timeout: int = 30) -> dict:
         """Make a POST request and return JSON response with retry logic"""
         effective_game_id = game_id or self.current_game_id
 
         for attempt in range(self.MAX_RETRIES):
             try:
                 logger.debug(f"POST {url} with json={json} (attempt {attempt + 1}/{self.MAX_RETRIES})")
-                response = self.session.post(url, json=json, timeout=30)
+                response = self.session.post(url, json=json, timeout=timeout)
                 logger.debug(f"POST {url} -> status={response.status_code}")
 
                 if response.status_code >= 500:
@@ -224,6 +225,15 @@ class RBCServer:
     def finish_invitation(self, invitation_id: str):
         """POST /api/invitations/{invitation_id}/finish - Mark invitation as finished"""
         self._post('{}/{}/finish'.format(self.invitations_url, invitation_id))
+
+    def join_invite_queue(self) -> dict:
+        """POST /api/ranked/join_invite_queue/ - Returns game_id, color, and opponent_name"""
+        response = self._post('{}/join_invite_queue/'.format(self.ranked_url), timeout=120)
+        return {
+            'game_id': response.get('game_id'),
+            'color': response.get('color'),
+            'opponent_name': response.get('opponent_name')
+        }
 
     # =========================================================================
     # Game Endpoints - /api/games/{game_id}/
@@ -993,6 +1003,24 @@ class RBCMCPServer:
                     "required": ["game_id", "username", "password"],
                 },
             ),
+            Tool(
+                name="join_invite_queue",
+                description="Join the ranked invite queue. Returns game_id, color, and opponent_name when matched.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "username": {
+                            "type": "string",
+                            "description": "Your username on rbc.jhuapl.edu",
+                        },
+                        "password": {
+                            "type": "string",
+                            "description": "Your password on rbc.jhuapl.edu",
+                        },
+                    },
+                    "required": ["username", "password"],
+                },
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> List[TextContent]:
@@ -1193,6 +1221,12 @@ class RBCMCPServer:
         elif name == "error_resign":
             return await self.error_resign_tool(
                 arguments["game_id"],
+                arguments["username"],
+                arguments["password"],
+            )
+
+        elif name == "join_invite_queue":
+            return await self.join_invite_queue_tool(
                 arguments["username"],
                 arguments["password"],
             )
@@ -2226,6 +2260,30 @@ class RBCMCPServer:
 
         except Exception as e:
             raise ValueError(f"Failed to error resign: {str(e)}")
+
+    async def join_invite_queue_tool(self, username: str, password: str) -> List[TextContent]:
+        """Join the ranked invite queue"""
+        try:
+            auth = (username, password)
+            server = RBCServer(self.server_url, auth)
+
+            # Call join_invite_queue method
+            result = server.join_invite_queue()
+
+            result_msg = f"Joined ranked invite queue:\n\n"
+            if result:
+                result_msg += f"  Game ID: {result.get('game_id')}\n"
+                color_str = "White" if result.get('color') else "Black"
+                result_msg += f"  Playing as: {color_str}\n"
+                result_msg += f"  Opponent: {result.get('opponent_name')}\n\n"
+                result_msg += f"Game matched! Use 'start_game' with game_id {result.get('game_id')} to begin.\n"
+            else:
+                result_msg += "  No game matched yet. Try again later.\n"
+
+            return [TextContent(type="text", text=result_msg)]
+
+        except Exception as e:
+            raise ValueError(f"Failed to join invite queue: {str(e)}")
 
     async def run(self):
         """Run the MCP server"""

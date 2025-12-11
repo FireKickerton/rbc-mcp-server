@@ -39,6 +39,24 @@ Reconnaissance Blind Chess is a chess variant where:
 14. **Report the winner and the win_reason**: Use the MCP tools get_winner_color and get_win_reason
 15. **If an expected API error occurs during the game, stop the game**: Use the MCP tool error_resign
 
+## Game Workflow When Playing Ranked Game of Reconnaissance using MCP:
+
+1. **Ask the user's RBC username and password**
+2. **Join the ranked game queue**: Use the MCP tool: join_invite_queue
+3. **Play all turns until the game is over**: Repeat steps 4 through 12 until the game is over
+4. **Check if the game is over once per second**: Use the MCP tool is_game_over
+5. **Wait for is_my-turn=true**: Use the MCP tool: get_game_status
+6. **If is_my_turn=true, then process the Opponent player's move. Otherwise,continue to wait for your turn**: Use the MCP tool handle_opponent_move_result
+7. **Find the valid squares to sense**: Use the MCP tool get_sense_actions
+8. **Anticipate the square where the opponent have moved to and submit sense on that square**: Use the MCP tool submit_sense
+9. **Review the current Board positions**: Use the MCP tool: get_board_ascii
+10. **Find the valid moves**: Use the MCP tool get_move_actions
+11. **Determine the best and valid chess move to capture the enemy king and submit the move**: Use the MCP tool submit_move
+12. **End your turn**: Use the MCP tool submit_end_turn
+13. **Repeat this Game Workflow from step number 4 until the game is over**
+14. **Report the winner and the win_reason**: Use the MCP tools get_winner_color and get_win_reason
+15. **If an expected API error occurs during the game, stop the game**: Use the MCP tool error_resign
+
 ## Strategic Framework
 
 ### Phase 1: Opening (Turns 1-10)
