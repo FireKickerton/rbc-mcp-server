@@ -101,14 +101,14 @@ class RBCServer:
         except Exception as e:
             logger.error(f"Failed to error_resign game {game_id}: {e}")
 
-    def _get(self, url: str, game_id: int = None) -> dict:
+    def _get(self, url: str, game_id: int = None, timeout: int = 30) -> dict:
         """Make a GET request and return JSON response with retry logic"""
         effective_game_id = game_id or self.current_game_id
 
         for attempt in range(self.MAX_RETRIES):
             try:
                 logger.debug(f"GET {url} (attempt {attempt + 1}/{self.MAX_RETRIES})")
-                response = self.session.get(url, timeout=30)
+                response = self.session.get(url, timeout=timeout)
                 logger.debug(f"GET {url} -> status={response.status_code}")
 
                 if response.status_code >= 500:
@@ -209,7 +209,7 @@ class RBCServer:
 
     def get_invitations(self) -> list:
         """GET /api/invitations/ - Returns array of unaccepted invitation IDs"""
-        return self._get('{}/'.format(self.invitations_url))['invitations']
+        return self._get('{}/'.format(self.invitations_url), timeout=120)['invitations']
 
     def send_invitation(self, opponent: str, color: bool) -> int:
         """POST /api/invitations/ - Send invitation to opponent, returns game_id"""
@@ -225,15 +225,6 @@ class RBCServer:
     def finish_invitation(self, invitation_id: str):
         """POST /api/invitations/{invitation_id}/finish - Mark invitation as finished"""
         self._post('{}/{}/finish'.format(self.invitations_url, invitation_id))
-
-    def join_invite_queue(self) -> dict:
-        """POST /api/ranked/join_invite_queue/ - Returns game_id, color, and opponent_name"""
-        response = self._post('{}/join_invite_queue/'.format(self.ranked_url), timeout=120)
-        return {
-            'game_id': response.get('game_id'),
-            'color': response.get('color'),
-            'opponent_name': response.get('opponent_name')
-        }
 
     # =========================================================================
     # Game Endpoints - /api/games/{game_id}/
@@ -367,11 +358,6 @@ class RBCMCPServer:
         self.active_games: Dict[int, GameState] = {}
         self.server_url = "https://rbc.jhuapl.edu"
 
-        # Ranked game listener
-        self.invitation_listener_thread: Optional[threading.Thread] = None
-        self.invitation_games: Dict[str, GameState] = {}  # Track invitation-based games (invitation_id is string)
-        self.stop_listening = threading.Event()
-
         # Register handlers
         self.server.list_resources()(self.list_resources)
         self.server.read_resource()(self.read_resource)
@@ -437,7 +423,7 @@ class RBCMCPServer:
             ),
             Tool(
                 name="start_ranked_game",
-                description="Start listening for ranked game invitations from the RBC server. Accepts invitations automatically and plays with assigned color.",
+                description="Start a ranked RBC game by listening for and accepting an invitation. Sets max_games to 1, waits for an invitation, accepts it, and returns the game_id. Use get_game_status, handle_opponent_move_result, submit_sense, submit_move, and submit_end_turn to play each turn.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -449,21 +435,8 @@ class RBCMCPServer:
                             "type": "string",
                             "description": "Your password on rbc.jhuapl.edu",
                         },
-                        "max_concurrent_games": {
-                            "type": "integer",
-                            "description": "Maximum number of concurrent ranked games to play (default: 1)",
-                            "default": 1,
-                        },
                     },
                     "required": ["username", "password"],
-                },
-            ),
-            Tool(
-                name="stop_ranked_listener",
-                description="Stop listening for ranked game invitations.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
                 },
             ),
             Tool(
@@ -1003,24 +976,7 @@ class RBCMCPServer:
                     "required": ["game_id", "username", "password"],
                 },
             ),
-            Tool(
-                name="join_invite_queue",
-                description="Join the ranked invite queue. Returns game_id, color, and opponent_name when matched.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "username": {
-                            "type": "string",
-                            "description": "Your username on rbc.jhuapl.edu",
-                        },
-                        "password": {
-                            "type": "string",
-                            "description": "Your password on rbc.jhuapl.edu",
-                        },
-                    },
-                    "required": ["username", "password"],
-                },
-            ),
+            
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> List[TextContent]:
@@ -1047,15 +1003,10 @@ class RBCMCPServer:
             )
 
         elif name == "start_ranked_game":
-            max_concurrent = arguments.get("max_concurrent_games", 1)
-            return await self.start_ranked_game(
+            return await self.start_ranked_game_tool(
                 arguments["username"],
                 arguments["password"],
-                max_concurrent,
             )
-
-        elif name == "stop_ranked_listener":
-            return await self.stop_ranked_listener()
 
         elif name == "get_board_ascii":
             return await self.get_board_ascii(arguments["game_id"])
@@ -1225,12 +1176,6 @@ class RBCMCPServer:
                 arguments["password"],
             )
 
-        elif name == "join_invite_queue":
-            return await self.join_invite_queue_tool(
-                arguments["username"],
-                arguments["password"],
-            )
-
         else:
             raise ValueError(f"Unknown tool: {name}")
 
@@ -1294,175 +1239,88 @@ class RBCMCPServer:
             )
         ]
 
-    def _listen_for_invitations(self, server_url: str, auth: tuple, max_concurrent_games: int):
+    async def start_ranked_game_tool(self, username: str, password: str) -> List[TextContent]:
         """
-        Listen for ranked game invitations (based on rc_connect.py).
-        Runs in a background thread and accepts invitations automatically.
+        Start a ranked RBC game by listening for and accepting an invitation.
+        Based on rc_connect.py's listen_for_invitations() and accept_invitation_and_play().
         """
-        #from reconchess.utilities import RBCServer
-
-        server = RBCServer(server_url, auth)
-        connected = False
-        invitation_threads: Dict[str, threading.Thread] = {}
-        finished_invitations: Dict[str, bool] = {}
-
-        while not self.stop_listening.is_set():
-            try:
-                invitations = server.get_invitations()
-
-                if not connected:
-                    print(f'[{datetime.now()}] Connected successfully to server!')
-                    connected = True
-                    server.set_max_games(max_concurrent_games)
-
-                # Clean up finished games
-                finished = []
-                for invitation_id in invitation_threads.keys():
-                    if not invitation_threads[invitation_id].is_alive() or finished_invitations.get(invitation_id, False):
-                        finished.append(invitation_id)
-
-                for invitation_id in finished:
-                    print(f'[{datetime.now()}] Terminating process for invitation {invitation_id}')
-                    invitation_threads[invitation_id].join(timeout=1)
-                    del invitation_threads[invitation_id]
-                    if invitation_id in finished_invitations:
-                        del finished_invitations[invitation_id]
-
-                # Accept new invitations
-                for invitation_id in invitations:
-                    if invitation_id not in invitation_threads:
-                        print(f'[{datetime.now()}] Received invitation {invitation_id}.')
-
-                        if len(invitation_threads) < max_concurrent_games:
-                            # Start thread to accept and play the game
-                            thread = threading.Thread(
-                                target=self._accept_invitation_and_play,
-                                args=(server_url, auth, invitation_id, finished_invitations),
-                                daemon=True,
-                            )
-                            thread.start()
-                            invitation_threads[invitation_id] = thread
-                        else:
-                            print(f'[{datetime.now()}] Not enough game slots to play invitation {invitation_id}.')
-
-            except Exception as e:
-                connected = False
-                print(f'[{datetime.now()}] Failed to connect to server')
-                print(f'Error: {e}')
-                traceback.print_exc()
-
-            # Sleep for 5 seconds before checking again
-            time.sleep(5)
-
-        print(f'[{datetime.now()}] Stopped listening for invitations')
-
-    def _accept_invitation_and_play(self, server_url: str, auth: tuple,
-                                     invitation_id: str, finished_dict: Dict[str, bool]):
-        """
-        Accept an invitation and play the game (based on rc_connect.py).
-        Replaces bot_cls with LLMPlayer instance.
-        """
-        #from reconchess.utilities import RBCServer
-
         try:
-            print(f'[{datetime.now()}] Accepting invitation {invitation_id}.')
+            auth = (username, password)
+            server = RBCServer(self.server_url, auth)
 
-            server = RBCServer(server_url, auth)
+            # Set max_games to 1 as per the requirement
+            logger.info(f"Setting max_games to 1 for user {username}")
+            server.set_max_games(1)
+            # Set ranked mode
+            server.set_ranked(True)
+
+            # Poll for invitations (similar to listen_for_invitations)
+            logger.info(f"Waiting for ranked game invitation...")
+            max_wait_time = 120  # Maximum wait time in seconds
+            poll_interval = 5  # Poll every 5 seconds
+            elapsed = 0
+
+            invitation_id = None
+            while elapsed < max_wait_time:
+                invitations = server.get_invitations()
+                logger.info(f"Got invitations: {invitations}")
+
+                if invitations:
+                    # Accept the first invitation
+                    invitation_id = invitations[0]
+                    logger.info(f"Received invitation {invitation_id}")
+                    break
+
+                # Wait before polling again
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+            if invitation_id is None:
+                return [TextContent(
+                    type="text",
+                    text=f"No invitation received within {max_wait_time} seconds.\n\n"
+                         f"Make sure ranked games are enabled on the server and try again."
+                )]
+
+            # Accept the invitation (similar to accept_invitation_and_play)
+            logger.info(f"Accepting invitation {invitation_id}")
             game_id = server.accept_invitation(invitation_id)
+            logger.info(f"Invitation {invitation_id} accepted. Game ID: {game_id}")
 
-            print(f'[{datetime.now()}] Invitation {invitation_id} accepted. Playing game {game_id}.')
+            # Get game info
+            player_color = server.get_player_color(game_id)
+            opponent_name = server.get_opponent_name(game_id)
 
             # Create game state
             game_state = GameState(
                 game_id=game_id,
                 board=chess.Board(),
                 is_ranked=True,
+                turn_phase=TurnPhase.WAITING_FOR_TURN,
+                current_turn=0,
+                player_color=player_color,
+                opponent_name=opponent_name,
             )
-
-            # Create LLMPlayer instance
-            #player = LLMPlayer(game_state)
 
             # Store in active games
             self.active_games[game_id] = game_state
-            #self.active_players[game_id] = player
-            self.invitation_games[invitation_id] = game_state
 
-            # Play the game
-            try:
-                #reconchess.play_remote_game(server_url, game_id, auth, player)
-                print(f'[{datetime.now()}] Finished game {game_id}')
-            except Exception as game_error:
-                print(f'[{datetime.now()}] Fatal error in game {game_id}:')
-                traceback.print_exc()
-                server.error_resign(game_id)
-            finally:
-                server.finish_invitation(invitation_id)
-                finished_dict[invitation_id] = True
+            # Mark as ready to start the game
+            logger.info(f"Marking ready for game {game_id}")
+            server.start(game_id)
+
+            color_str = "White" if player_color else "Black"
+            result_msg = f"Ranked game started!\n\n"
+            result_msg += f"  Game ID: {game_id}\n"
+            result_msg += f"  Playing as: {color_str}\n"
+            result_msg += f"  Opponent: {opponent_name}\n\n"
+
+            return [TextContent(type="text", text=result_msg)]
 
         except Exception as e:
-            print(f'[{datetime.now()}] Error accepting invitation {invitation_id}:')
-            print(f'Error: {e}')
-            traceback.print_exc()
-            finished_dict[invitation_id] = True
-
-    async def start_ranked_game(self, username: str, password: str,
-                                max_concurrent_games: int = 1) -> List[TextContent]:
-        """Start listening for ranked game invitations"""
-
-        if self.invitation_listener_thread and self.invitation_listener_thread.is_alive():
-            return [
-                TextContent(
-                    type="text",
-                    text="Already listening for ranked game invitations. Use 'stop_ranked_listener' to stop.",
-                )
-            ]
-
-        # Reset stop flag
-        self.stop_listening.clear()
-
-        # Start listener thread
-        auth = (username, password)
-        self.invitation_listener_thread = threading.Thread(
-            target=self._listen_for_invitations,
-            args=(self.server_url, auth, max_concurrent_games),
-            daemon=True,
-        )
-        self.invitation_listener_thread.start()
-
-        return [
-            TextContent(
-                type="text",
-                text=f"Started listening for ranked game invitations.\n\n"
-                     f"Server: {self.server_url}\n"
-                     f"Max concurrent games: {max_concurrent_games}\n"
-                     f"Username: {username}\n\n"
-                     f"When invitations are received, games will start automatically.\n"
-                     f"Use 'list_active_games' to see ongoing games.\n"
-                     f"Use 'stop_ranked_listener' to stop listening.",
-            )
-        ]
-
-    async def stop_ranked_listener(self) -> List[TextContent]:
-        """Stop listening for ranked game invitations"""
-
-        if not self.invitation_listener_thread or not self.invitation_listener_thread.is_alive():
-            return [
-                TextContent(
-                    type="text",
-                    text="Not currently listening for invitations.",
-                )
-            ]
-
-        self.stop_listening.set()
-        self.invitation_listener_thread.join(timeout=10)
-
-        return [
-            TextContent(
-                type="text",
-                text="Stopped listening for ranked game invitations.\n\n"
-                     "Any games already in progress will continue.",
-            )
-        ]
+            logger.error(f"Failed to start ranked game: {e}")
+            logger.error(traceback.format_exc())
+            raise ValueError(f"Failed to start ranked game: {str(e)}")
 
     async def get_game_state(self, game_id: int) -> List[TextContent]:
         """Get current game state"""
@@ -2126,7 +1984,7 @@ class RBCMCPServer:
                 result_msg += f"  Total: {len(invitations)} invitations\n"
                 result_msg += f"  Invitation IDs: {', '.join(str(i) for i in invitations)}\n"
             else:
-                result_msg += "  No pending invitations\n"
+                result_msg += "  No pending invitations. Try requesting a new invitation.\n"
 
             return [TextContent(type="text", text=result_msg)]
 
@@ -2261,29 +2119,7 @@ class RBCMCPServer:
         except Exception as e:
             raise ValueError(f"Failed to error resign: {str(e)}")
 
-    async def join_invite_queue_tool(self, username: str, password: str) -> List[TextContent]:
-        """Join the ranked invite queue"""
-        try:
-            auth = (username, password)
-            server = RBCServer(self.server_url, auth)
 
-            # Call join_invite_queue method
-            result = server.join_invite_queue()
-
-            result_msg = f"Joined ranked invite queue:\n\n"
-            if result:
-                result_msg += f"  Game ID: {result.get('game_id')}\n"
-                color_str = "White" if result.get('color') else "Black"
-                result_msg += f"  Playing as: {color_str}\n"
-                result_msg += f"  Opponent: {result.get('opponent_name')}\n\n"
-                result_msg += f"Game matched! Use 'start_game' with game_id {result.get('game_id')} to begin.\n"
-            else:
-                result_msg += "  No game matched yet. Try again later.\n"
-
-            return [TextContent(type="text", text=result_msg)]
-
-        except Exception as e:
-            raise ValueError(f"Failed to join invite queue: {str(e)}")
 
     async def run(self):
         """Run the MCP server"""
